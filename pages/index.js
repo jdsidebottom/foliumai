@@ -1,4 +1,5 @@
 
+
 import React, { useState, useRef, useEffect } from 'react';
 import Head from 'next/head';
 import { Camera, Upload, Leaf, Droplets, Sun, Bug, Clock, Heart, Info, CheckCircle, Moon } from 'lucide-react';
