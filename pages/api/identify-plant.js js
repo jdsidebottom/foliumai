@@ -1,5 +1,4 @@
 export default async function handler(req, res) {
-  // Enable CORS
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
@@ -13,13 +12,9 @@ export default async function handler(req, res) {
     return res.status(405).json({ error: 'Method not allowed' });
   }
 
-  // Check for API key
   const apiKey = process.env.PLANT_ID_API_KEY;
   if (!apiKey) {
-    return res.status(500).json({ 
-      error: 'Server configuration error',
-      details: 'API key not configured'
-    });
+    return res.status(500).json({ error: 'API key not configured' });
   }
 
   try {
@@ -29,10 +24,10 @@ export default async function handler(req, res) {
       return res.status(400).json({ error: 'No images provided' });
     }
 
-    console.log('Making request to Plant.id API with correct parameters...');
+    console.log('Submitting identification request to Plant.id...');
     
-    // Fixed Plant.id API call with correct parameters
-    const plantIdResponse = await fetch('https://api.plant.id/v3/identification', {
+    // Step 1: Submit identification request
+    const submitResponse = await fetch('https://api.plant.id/v3/identification', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -40,60 +35,67 @@ export default async function handler(req, res) {
       },
       body: JSON.stringify({
         images: images,
-        // Correct Plant.id v3 parameters
         classification_level: 'all',
         similar_images: true,
         health: 'all'
       }),
     });
 
-    console.log('Plant.id response status:', plantIdResponse.status);
+    if (!submitResponse.ok) {
+      const errorText = await submitResponse.text();
+      return res.status(submitResponse.status).json({ 
+        error: `Plant.id submission failed: ${submitResponse.status}`,
+        details: errorText
+      });
+    }
+
+    const submitData = await submitResponse.json();
+    console.log('Received job ID:', submitData.id);
+
+    // Step 2: Wait and poll for results
+    const jobId = submitData.id;
+    const accessToken = submitData.access_token;
     
-    if (!plantIdResponse.ok) {
-      const errorText = await plantIdResponse.text();
-      console.error('Plant.id API error:', plantIdResponse.status, errorText);
+    let attempts = 0;
+    const maxAttempts = 30; // 30 seconds max
+    
+    while (attempts < maxAttempts) {
+      console.log(`Polling attempt ${attempts + 1}...`);
       
-      if (plantIdResponse.status === 401) {
-        return res.status(401).json({ 
-          error: 'Invalid API key',
-          details: 'Please check your Plant.id API key'
-        });
-      } else if (plantIdResponse.status === 429) {
-        return res.status(429).json({ 
-          error: 'Rate limit exceeded',
-          details: 'Too many requests to Plant.id API'
-        });
+      // Wait 1 second between polls
+      await new Promise(resolve => setTimeout(resolve, 1000));
+      
+      const resultResponse = await fetch(`https://api.plant.id/v3/identification/${jobId}`, {
+        method: 'GET',
+        headers: {
+          'Api-Key': apiKey,
+          'Authorization': `Bearer ${accessToken}`
+        }
+      });
+
+      if (resultResponse.ok) {
+        const resultData = await resultResponse.json();
+        
+        // Check if processing is complete
+        if (resultData.result && resultData.result.classification) {
+          console.log('Plant identification completed!');
+          return res.status(200).json(resultData);
+        }
+        
+        // If still processing, continue polling
+        console.log('Still processing, continuing to poll...');
       } else {
-        return res.status(plantIdResponse.status).json({ 
-          error: `Plant.id API error: ${plantIdResponse.status}`,
-          details: errorText
-        });
+        console.log('Error polling results:', resultResponse.status);
       }
+      
+      attempts++;
     }
 
-    // Get response text and parse JSON
-    const responseText = await plantIdResponse.text();
-    console.log('Plant.id response length:', responseText.length);
-    
-    if (!responseText || responseText.trim() === '') {
-      return res.status(500).json({ 
-        error: 'Empty response from Plant.id API'
-      });
-    }
-
-    let data;
-    try {
-      data = JSON.parse(responseText);
-    } catch (parseError) {
-      console.error('Failed to parse Plant.id response:', parseError);
-      return res.status(500).json({ 
-        error: 'Invalid response format from Plant.id API',
-        details: 'Response is not valid JSON'
-      });
-    }
-
-    console.log('Successfully parsed Plant.id response');
-    res.status(200).json(data);
+    // If we get here, polling timed out
+    return res.status(408).json({ 
+      error: 'Plant identification timed out',
+      details: 'Processing took too long, please try again'
+    });
 
   } catch (error) {
     console.error('Server error:', error);
