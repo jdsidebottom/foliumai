@@ -1,11 +1,12 @@
 export default async function handler(req, res) {
+  // Always set JSON response headers
+  res.setHeader('Content-Type', 'application/json');
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
   
   if (req.method === 'OPTIONS') {
-    res.status(200).end();
-    return;
+    return res.status(200).json({ message: 'CORS preflight' });
   }
 
   if (req.method !== 'POST') {
@@ -24,9 +25,12 @@ export default async function handler(req, res) {
       return res.status(400).json({ error: 'No images provided' });
     }
 
-    console.log('Step 1: Submitting to Plant.id...');
-    
-    // Step 1: Submit identification job
+    console.log('=== PLANT ID API TEST ===');
+    console.log('API Key exists:', !!apiKey);
+    console.log('Images array length:', images.length);
+
+    // Step 1: Submit to Plant.id
+    console.log('Submitting to Plant.id...');
     const submitResponse = await fetch('https://api.plant.id/v3/identification', {
       method: 'POST',
       headers: {
@@ -41,95 +45,90 @@ export default async function handler(req, res) {
       }),
     });
 
-    console.log('Submit response status:', submitResponse.status);
+    console.log('Submit status:', submitResponse.status);
 
     if (!submitResponse.ok) {
       const errorText = await submitResponse.text();
-      return res.status(submitResponse.status).json({ 
-        error: `Plant.id submission failed: ${submitResponse.status}`,
-        details: errorText
+      console.log('Submit error:', errorText);
+      return res.status(200).json({ 
+        error: true,
+        message: `Plant.id submission failed: ${submitResponse.status}`,
+        details: errorText,
+        plantName: 'Submission Failed',
+        healthScore: 0
       });
     }
 
     const submitData = await submitResponse.json();
-    console.log('Job submitted successfully. Job ID:', submitData.id);
-
     const jobId = submitData.id;
     const accessToken = submitData.access_token;
     
-    // Step 2: Poll for results
+    console.log('Job ID received:', jobId);
+
+    // Step 2: Simple polling (only 3 attempts for testing)
     let attempts = 0;
-    const maxAttempts = 20; // 20 seconds max
+    const maxAttempts = 3;
     
     while (attempts < maxAttempts) {
-      console.log(`Polling attempt ${attempts + 1}/${maxAttempts}...`);
+      console.log(`Polling attempt ${attempts + 1}...`);
       
-      // Wait 1 second between polls
-      await new Promise(resolve => setTimeout(resolve, 1000));
+      // Wait 2 seconds between polls
+      await new Promise(resolve => setTimeout(resolve, 2000));
       
-      const pollResponse = await fetch(`https://api.plant.id/v3/identification/${jobId}`, {
-        method: 'GET',
-        headers: {
-          'Api-Key': apiKey,
-          // Try both authorization methods
-          'Authorization': `Bearer ${accessToken}`
-        }
-      });
+      try {
+        const pollResponse = await fetch(`https://api.plant.id/v3/identification/${jobId}`, {
+          method: 'GET',
+          headers: {
+            'Api-Key': apiKey,
+            'Authorization': `Bearer ${accessToken}`
+          }
+        });
 
-      console.log(`Poll response status: ${pollResponse.status}`);
+        console.log('Poll status:', pollResponse.status);
 
-      if (pollResponse.ok) {
-        const pollData = await pollResponse.json();
-        console.log('Poll response preview:', JSON.stringify(pollData).substring(0, 200));
-        
-        // Check if results are ready
-        if (pollData.result && pollData.result.classification && pollData.result.classification.suggestions) {
-          console.log('✅ Plant identification completed!');
-          return res.status(200).json(pollData);
-        } else if (pollData.status === 'completed') {
-          console.log('✅ Job completed!');
-          return res.status(200).json(pollData);
-        } else {
-          console.log('⏳ Still processing, continuing to poll...');
-        }
-      } else {
-        const errorText = await pollResponse.text();
-        console.log(`❌ Poll failed: ${pollResponse.status} - ${errorText}`);
-        
-        // If unauthorized, try without Bearer token
-        if (pollResponse.status === 401 && attempts === 0) {
-          console.log('Trying poll without Bearer token...');
-          const retryResponse = await fetch(`https://api.plant.id/v3/identification/${jobId}`, {
-            method: 'GET',
-            headers: {
-              'Api-Key': apiKey
-            }
-          });
+        if (pollResponse.ok) {
+          const pollData = await pollResponse.json();
           
-          if (retryResponse.ok) {
-            const retryData = await retryResponse.json();
-            if (retryData.result && retryData.result.classification) {
-              return res.status(200).json(retryData);
-            }
+          // Check if we have results
+          if (pollData.result && pollData.result.classification && pollData.result.classification.suggestions) {
+            console.log('SUCCESS: Got plant data!');
+            return res.status(200).json(pollData);
           }
         }
+      } catch (pollError) {
+        console.log('Poll error:', pollError.message);
       }
       
       attempts++;
     }
 
-    // Timeout
-    return res.status(408).json({ 
-      error: 'Plant identification timed out',
-      details: `Processing took longer than ${maxAttempts} seconds`,
-      job_id: jobId
+    // If we get here, return a timeout but still valid JSON
+    console.log('TIMEOUT: Returning mock data');
+    return res.status(200).json({
+      error: true,
+      message: 'Plant identification timed out, but API is working',
+      plantName: 'Timeout - Try Again',
+      healthScore: 0,
+      debug: {
+        jobId: jobId,
+        attempts: attempts,
+        note: 'Job was submitted successfully but results not ready yet'
+      }
     });
 
   } catch (error) {
-    console.error('Server error:', error);
-    res.status(500).json({ 
-      error: 'Internal server error',
-      message: error.message
+    console.error('=== API ERROR ===', error);
+    
+    // Always return valid JSON, even for errors
+    return res.status(200).json({ 
+      error: true,
+      message: `Server error: ${error.message}`,
+      plantName: 'Server Error',
+      healthScore: 0,
+      debug: {
+        errorType: error.constructor.name,
+        errorMessage: error.message
+      }
     });
   }
 }
