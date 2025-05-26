@@ -14,8 +14,8 @@ export default async function handler(req, res) {
   }
 
   // Check for API key
-  if (!process.env.PLANT_ID_API_KEY) {
-    console.error('PLANT_ID_API_KEY environment variable is not set');
+  const apiKey = process.env.PLANT_ID_API_KEY;
+  if (!apiKey) {
     return res.status(500).json({ 
       error: 'Server configuration error',
       details: 'API key not configured'
@@ -29,46 +29,34 @@ export default async function handler(req, res) {
       return res.status(400).json({ error: 'No images provided' });
     }
 
-    console.log('Making request to Plant.id API...');
+    console.log('Making request to Plant.id API with correct parameters...');
     
+    // Fixed Plant.id API call with correct parameters
     const plantIdResponse = await fetch('https://api.plant.id/v3/identification', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'Api-Key': process.env.PLANT_ID_API_KEY,
+        'Api-Key': apiKey,
       },
       body: JSON.stringify({
         images: images,
+        // Correct Plant.id v3 parameters
+        classification_level: 'all',
         similar_images: true,
-        plant_details: [
-          'common_names',
-          'url', 
-          'description',
-          'watering',
-          'propagation',
-          'hardiness'
-        ],
-        disease_details: [
-          'description',
-          'treatment',
-          'classification',
-          'cause'
-        ],
+        health: 'all'
       }),
     });
 
     console.log('Plant.id response status:', plantIdResponse.status);
     
-    // Check if response is ok
     if (!plantIdResponse.ok) {
       const errorText = await plantIdResponse.text();
       console.error('Plant.id API error:', plantIdResponse.status, errorText);
       
-      // Handle specific error codes
       if (plantIdResponse.status === 401) {
         return res.status(401).json({ 
           error: 'Invalid API key',
-          details: 'Please check your Plant.id API key configuration'
+          details: 'Please check your Plant.id API key'
         });
       } else if (plantIdResponse.status === 429) {
         return res.status(429).json({ 
@@ -83,15 +71,13 @@ export default async function handler(req, res) {
       }
     }
 
-    // Get response text first, then try to parse as JSON
+    // Get response text and parse JSON
     const responseText = await plantIdResponse.text();
     console.log('Plant.id response length:', responseText.length);
     
     if (!responseText || responseText.trim() === '') {
-      console.error('Empty response from Plant.id API');
       return res.status(500).json({ 
-        error: 'Empty response from Plant.id API',
-        details: 'The API returned no data'
+        error: 'Empty response from Plant.id API'
       });
     }
 
@@ -99,8 +85,7 @@ export default async function handler(req, res) {
     try {
       data = JSON.parse(responseText);
     } catch (parseError) {
-      console.error('Failed to parse Plant.id response as JSON:', parseError);
-      console.error('Response text:', responseText.substring(0, 500));
+      console.error('Failed to parse Plant.id response:', parseError);
       return res.status(500).json({ 
         error: 'Invalid response format from Plant.id API',
         details: 'Response is not valid JSON'
@@ -112,19 +97,9 @@ export default async function handler(req, res) {
 
   } catch (error) {
     console.error('Server error:', error);
-    
-    // Handle network errors
-    if (error.code === 'ENOTFOUND' || error.code === 'ECONNREFUSED') {
-      return res.status(503).json({ 
-        error: 'Unable to connect to Plant.id API',
-        details: 'Network connectivity issue'
-      });
-    }
-    
     res.status(500).json({ 
       error: 'Internal server error',
-      message: error.message,
-      details: 'An unexpected error occurred'
+      message: error.message
     });
   }
 }
