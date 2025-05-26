@@ -66,3 +66,4 @@ const processPlantIdResponse = (data) => {
     ]
   };
 };
+export default FoliumAI;
