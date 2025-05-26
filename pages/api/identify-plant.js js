@@ -24,9 +24,9 @@ export default async function handler(req, res) {
       return res.status(400).json({ error: 'No images provided' });
     }
 
-    console.log('Submitting identification request to Plant.id...');
+    console.log('Step 1: Submitting to Plant.id...');
     
-    // Step 1: Submit identification request
+    // Step 1: Submit identification job
     const submitResponse = await fetch('https://api.plant.id/v3/identification', {
       method: 'POST',
       headers: {
@@ -41,6 +41,8 @@ export default async function handler(req, res) {
       }),
     });
 
+    console.log('Submit response status:', submitResponse.status);
+
     if (!submitResponse.ok) {
       const errorText = await submitResponse.text();
       return res.status(submitResponse.status).json({ 
@@ -50,51 +52,77 @@ export default async function handler(req, res) {
     }
 
     const submitData = await submitResponse.json();
-    console.log('Received job ID:', submitData.id);
+    console.log('Job submitted successfully. Job ID:', submitData.id);
 
-    // Step 2: Wait and poll for results
     const jobId = submitData.id;
     const accessToken = submitData.access_token;
     
+    // Step 2: Poll for results
     let attempts = 0;
-    const maxAttempts = 30; // 30 seconds max
+    const maxAttempts = 20; // 20 seconds max
     
     while (attempts < maxAttempts) {
-      console.log(`Polling attempt ${attempts + 1}...`);
+      console.log(`Polling attempt ${attempts + 1}/${maxAttempts}...`);
       
       // Wait 1 second between polls
       await new Promise(resolve => setTimeout(resolve, 1000));
       
-      const resultResponse = await fetch(`https://api.plant.id/v3/identification/${jobId}`, {
+      const pollResponse = await fetch(`https://api.plant.id/v3/identification/${jobId}`, {
         method: 'GET',
         headers: {
           'Api-Key': apiKey,
+          // Try both authorization methods
           'Authorization': `Bearer ${accessToken}`
         }
       });
 
-      if (resultResponse.ok) {
-        const resultData = await resultResponse.json();
+      console.log(`Poll response status: ${pollResponse.status}`);
+
+      if (pollResponse.ok) {
+        const pollData = await pollResponse.json();
+        console.log('Poll response preview:', JSON.stringify(pollData).substring(0, 200));
         
-        // Check if processing is complete
-        if (resultData.result && resultData.result.classification) {
-          console.log('Plant identification completed!');
-          return res.status(200).json(resultData);
+        // Check if results are ready
+        if (pollData.result && pollData.result.classification && pollData.result.classification.suggestions) {
+          console.log('✅ Plant identification completed!');
+          return res.status(200).json(pollData);
+        } else if (pollData.status === 'completed') {
+          console.log('✅ Job completed!');
+          return res.status(200).json(pollData);
+        } else {
+          console.log('⏳ Still processing, continuing to poll...');
         }
-        
-        // If still processing, continue polling
-        console.log('Still processing, continuing to poll...');
       } else {
-        console.log('Error polling results:', resultResponse.status);
+        const errorText = await pollResponse.text();
+        console.log(`❌ Poll failed: ${pollResponse.status} - ${errorText}`);
+        
+        // If unauthorized, try without Bearer token
+        if (pollResponse.status === 401 && attempts === 0) {
+          console.log('Trying poll without Bearer token...');
+          const retryResponse = await fetch(`https://api.plant.id/v3/identification/${jobId}`, {
+            method: 'GET',
+            headers: {
+              'Api-Key': apiKey
+            }
+          });
+          
+          if (retryResponse.ok) {
+            const retryData = await retryResponse.json();
+            if (retryData.result && retryData.result.classification) {
+              return res.status(200).json(retryData);
+            }
+          }
+        }
       }
       
       attempts++;
     }
 
-    // If we get here, polling timed out
+    // Timeout
     return res.status(408).json({ 
       error: 'Plant identification timed out',
-      details: 'Processing took too long, please try again'
+      details: `Processing took longer than ${maxAttempts} seconds`,
+      job_id: jobId
     });
 
   } catch (error) {
