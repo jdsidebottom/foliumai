@@ -1,3 +1,7 @@
+import React, { useState, useRef, useEffect } from 'react';
+import Head from 'next/head';
+import { Camera, Upload, Leaf, Droplets, Sun, Bug, Clock, Heart, Info, CheckCircle, Moon } from 'lucide-react';
+
 const processPlantIdResponse = (data) => {
   // Handle Plant.id v3 response format
   const isPlant = data.result?.is_plant?.binary || data.result?.is_plant?.probability > 0.5 || false;
