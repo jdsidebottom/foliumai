@@ -4,9 +4,6 @@ import React, { useState, useRef, useEffect } from 'react';
 import Head from 'next/head';
 import { Camera, Upload, Leaf, Droplets, Sun, Bug, Clock, Heart, Info, CheckCircle, Moon } from 'lucide-react';
 
-function FoliumAI() {
-  // your code here
-}
 
 const processPlantIdResponse = (data) => {
   // Handle Plant.id v3 response format
@@ -72,4 +69,6 @@ const processPlantIdResponse = (data) => {
     ]
   };
 };
-export default FoliumAI;
+export default function FoliumAI() {
+  // move your entire function code here
+}
