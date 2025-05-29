@@ -1,134 +1,166 @@
+// /api/identify-plant.js - Enhanced API endpoint with timeout fixes
+
 export default async function handler(req, res) {
-  // Always set JSON response headers
-  res.setHeader('Content-Type', 'application/json');
+  // Set headers for CORS and caching
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+  res.setHeader('Cache-Control', 'no-cache');
   
   if (req.method === 'OPTIONS') {
-    return res.status(200).json({ message: 'CORS preflight' });
+    res.status(200).end();
+    return;
   }
 
   if (req.method !== 'POST') {
     return res.status(405).json({ error: 'Method not allowed' });
   }
 
-  const apiKey = process.env.PLANT_ID_API_KEY;
-  if (!apiKey) {
-    return res.status(500).json({ error: 'API key not configured' });
-  }
-
   try {
     const { images } = req.body;
     
-    if (!images || !Array.isArray(images) || images.length === 0) {
-      return res.status(400).json({ error: 'No images provided' });
-    }
-
-    console.log('=== PLANT ID API TEST ===');
-    console.log('API Key exists:', !!apiKey);
-    console.log('Images array length:', images.length);
-
-    // Step 1: Submit to Plant.id
-    console.log('Submitting to Plant.id...');
-    const submitResponse = await fetch('https://api.plant.id/v3/identification', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Api-Key': apiKey,
-      },
-      body: JSON.stringify({
-        images: images,
-        classification_level: 'all',
-        similar_images: true,
-        health: 'all'
-      }),
-    });
-
-    console.log('Submit status:', submitResponse.status);
-
-    if (!submitResponse.ok) {
-      const errorText = await submitResponse.text();
-      console.log('Submit error:', errorText);
-      return res.status(200).json({ 
-        error: true,
-        message: `Plant.id submission failed: ${submitResponse.status}`,
-        details: errorText,
-        plantName: 'Submission Failed',
+    if (!images?.[0]) {
+      return res.status(400).json({ 
+        error: 'No image provided',
+        message: 'Please upload an image to identify',
+        plantName: 'No Image',
         healthScore: 0
       });
     }
 
-    const submitData = await submitResponse.json();
-    const jobId = submitData.id;
-    const accessToken = submitData.access_token;
+    const base64Image = images[0];
+    const imageSizeKB = (base64Image.length * 0.75) / 1024;
     
-    console.log('Job ID received:', jobId);
-
-    // Step 2: Simple polling (only 3 attempts for testing)
-    let attempts = 0;
-    const maxAttempts = 3;
+    console.log(`Processing image: ${imageSizeKB.toFixed(2)}KB`);
     
-    while (attempts < maxAttempts) {
-      console.log(`Polling attempt ${attempts + 1}...`);
-      
-      // Wait 2 seconds between polls
-      await new Promise(resolve => setTimeout(resolve, 2000));
-      
-      try {
-        const pollResponse = await fetch(`https://api.plant.id/v3/identification/${jobId}`, {
-          method: 'GET',
-          headers: {
-            'Api-Key': apiKey,
-            'Authorization': `Bearer ${accessToken}`
-          }
-        });
-
-        console.log('Poll status:', pollResponse.status);
-
-        if (pollResponse.ok) {
-          const pollData = await pollResponse.json();
-          
-          // Check if we have results
-          if (pollData.result && pollData.result.classification && pollData.result.classification.suggestions) {
-            console.log('SUCCESS: Got plant data!');
-            return res.status(200).json(pollData);
-          }
-        }
-      } catch (pollError) {
-        console.log('Poll error:', pollError.message);
-      }
-      
-      attempts++;
+    // Reject very large images immediately
+    if (imageSizeKB > 1024) { // 1MB limit
+      return res.status(400).json({
+        error: 'Image too large',
+        message: 'Please use a smaller image (under 1MB). Try taking a new photo or compressing the image.',
+        plantName: 'Image Too Large',
+        healthScore: 0
+      });
     }
 
-    // If we get here, return a timeout but still valid JSON
-    console.log('TIMEOUT: Returning mock data');
-    return res.status(200).json({
-      error: true,
-      message: 'Plant identification timed out, but API is working',
-      plantName: 'Timeout - Try Again',
-      healthScore: 0,
-      debug: {
-        jobId: jobId,
-        attempts: attempts,
-        note: 'Job was submitted successfully but results not ready yet'
-      }
+    // UNCOMMENT THE NEXT 4 LINES TO TEST WITH MOCK DATA (bypassing Plant.id API):
+    // const mockResponse = { result: { is_plant: { binary: true, probability: 0.99 }, classification: { suggestions: [{ name: "Test Plant", probability: 0.95, details: { common_names: ["Mock Plant"] } }] }, health_assessment: { is_healthy: { binary: true }, diseases: { suggestions: [] } } } };
+    // console.log('Using mock response for testing');
+    // return res.status(200).json(mockResponse);
+    // 
+
+    // Shorter timeout for external API (12 seconds)
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => {
+      controller.abort();
+      console.log('Plant.id API timeout after 12 seconds');
+    }, 12000);
+
+    console.log('Calling Plant.id API...');
+    
+    const apiResponse = await fetch('https://api.plant.id/v3/identification', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Api-Key': process.env.PLANT_ID_API_KEY
+      },
+      body: JSON.stringify({
+        images: [base64Image],
+        similar_images: true,
+        plant_details: ['common_names', 'url', 'name_authority'],
+        health_assessment: true
+      }),
+      signal: controller.signal
     });
 
-  } catch (error) {
-    console.error('=== API ERROR ===', error);
-    
-    // Always return valid JSON, even for errors
-    return res.status(200).json({ 
-      error: true,
-      message: `Server error: ${error.message}`,
-      plantName: 'Server Error',
-      healthScore: 0,
-      debug: {
-        errorType: error.constructor.name,
-        errorMessage: error.message
+    clearTimeout(timeoutId);
+
+    if (!apiResponse.ok) {
+      console.error(`Plant.id API error: ${apiResponse.status}`);
+      
+      // Handle specific API errors
+      if (apiResponse.status === 429) {
+        return res.status(429).json({
+          error: 'Rate limit exceeded',
+          message: 'Too many requests to the plant identification service. Please wait 30 seconds and try again.',
+          plantName: 'Rate Limited',
+          healthScore: 0
+        });
       }
+      
+      if (apiResponse.status >= 500) {
+        return res.status(503).json({
+          error: 'Service unavailable',
+          message: 'The plant identification service is temporarily down. Please try again in a few minutes.',
+          plantName: 'Service Down',
+          healthScore: 0
+        });
+      }
+
+      if (apiResponse.status === 402) {
+        return res.status(402).json({
+          error: 'API quota exceeded',
+          message: 'Plant identification quota exceeded. Please check your Plant.id account.',
+          plantName: 'Quota Exceeded',
+          healthScore: 0
+        });
+      }
+
+      throw new Error(`Plant.id API error: ${apiResponse.status}`);
+    }
+
+    const data = await apiResponse.json();
+    console.log('Plant.id API success');
+    
+    // Validate response data
+    if (!data || !data.result) {
+      console.error('Invalid response from Plant.id API:', data);
+      return res.status(502).json({
+        error: 'Invalid API response',
+        message: 'Received invalid data from plant identification service. Please try again.',
+        plantName: 'Invalid Response',
+        healthScore: 0
+      });
+    }
+    
+    return res.status(200).json(data);
+
+  } catch (error) {
+    console.error('API Handler Error:', error.message);
+
+    if (error.name === 'AbortError') {
+      return res.status(408).json({
+        error: 'Request timeout',
+        message: 'The plant identification took too long. Please try with a simpler image or check your connection.',
+        plantName: 'Timeout',
+        healthScore: 0
+      });
+    }
+
+    if (error.message.includes('fetch') || error.message.includes('network')) {
+      return res.status(503).json({
+        error: 'Network error',
+        message: 'Cannot connect to plant identification service. Please check your internet connection and try again.',
+        plantName: 'Network Error',
+        healthScore: 0
+      });
+    }
+
+    if (error.message.includes('ENOTFOUND') || error.message.includes('DNS')) {
+      return res.status(503).json({
+        error: 'DNS error',
+        message: 'Cannot resolve plant identification service. Please try again later.',
+        plantName: 'DNS Error',
+        healthScore: 0
+      });
+    }
+
+    // Generic error
+    return res.status(500).json({
+      error: 'Identification failed',
+      message: 'An unexpected error occurred. Please try again with a different image.',
+      plantName: 'Error',
+      healthScore: 0
     });
   }
 }
