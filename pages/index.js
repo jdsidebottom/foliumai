@@ -35,31 +35,28 @@ export default function FoliumAI() {
     }
   };
 
- const handleImageUpload = async (event) => {
-  const file = event.target.files[0];
-  if (file) {
-    console.log('File size:', (file.size / 1024 / 1024).toFixed(2) + 'MB');
-    console.log('File type:', file.type);
-    
-    try {
-      // Skip compression for now - use original file
+  // FIXED: No compression image upload
+  const handleImageUpload = (event) => {
+    const file = event.target.files[0];
+    if (file) {
+      console.log('=== IMAGE DEBUG ===');
+      console.log('File name:', file.name);
+      console.log('File type:', file.type);
+      console.log('File size:', file.size, 'bytes');
+      console.log('File size:', (file.size / 1024).toFixed(2) + 'KB');
+      
       const reader = new FileReader();
-      const imageDataUrl = await new Promise((resolve) => {
-        reader.onload = (e) => {
-          console.log('Original data URL length:', e.target.result.length);
-          resolve(e.target.result);
-        };
-        reader.readAsDataURL(file);
-      });
-      
-      setSelectedImage(imageDataUrl);
-      analyzeImageWithAPI(imageDataUrl);
-      
-    } catch (error) {
-      console.error('Image error:', error);
+      reader.onload = (e) => {
+        const dataUrl = e.target.result;
+        console.log('Data URL length:', dataUrl.length);
+        console.log('Data URL preview:', dataUrl.substring(0, 100));
+        
+        setSelectedImage(dataUrl);
+        analyzeImageWithAPI(dataUrl);
+      };
+      reader.readAsDataURL(file);
     }
-  }
-};
+  };
 
   const analyzeImageWithAPI = async (imageDataUrl) => {
     setIsAnalyzing(true);
@@ -68,6 +65,7 @@ export default function FoliumAI() {
     try {
       // Convert data URL to base64
       const base64Image = imageDataUrl.split(',')[1];
+      console.log('Base64 length being sent:', base64Image.length);
 
       // Call our serverless function
       const response = await fetch('/api/identify-plant', {
@@ -86,6 +84,8 @@ export default function FoliumAI() {
       }
 
       const data = await response.json();
+      console.log('API response:', data);
+      
       const processedAnalysis = processPlantIdResponse(data);
       setAnalysis(processedAnalysis);
 
@@ -103,6 +103,16 @@ export default function FoliumAI() {
   };
 
   const processPlantIdResponse = (data) => {
+    // Handle error responses from our API
+    if (data.error) {
+      return {
+        error: true,
+        message: data.message || 'Plant identification failed',
+        plantName: data.plantName || 'Error',
+        healthScore: data.healthScore || 0
+      };
+    }
+
     const isPlant = data.result?.is_plant?.binary || data.result?.is_plant?.probability > 0.5 || false;
     
     if (!isPlant) {
