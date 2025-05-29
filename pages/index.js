@@ -35,17 +35,31 @@ export default function FoliumAI() {
     }
   };
 
-  const handleImageUpload = (event) => {
-    const file = event.target.files[0];
-    if (file) {
+ const handleImageUpload = async (event) => {
+  const file = event.target.files[0];
+  if (file) {
+    console.log('File size:', (file.size / 1024 / 1024).toFixed(2) + 'MB');
+    console.log('File type:', file.type);
+    
+    try {
+      // Skip compression for now - use original file
       const reader = new FileReader();
-      reader.onload = (e) => {
-        setSelectedImage(e.target.result);
-        analyzeImageWithAPI(e.target.result);
-      };
-      reader.readAsDataURL(file);
+      const imageDataUrl = await new Promise((resolve) => {
+        reader.onload = (e) => {
+          console.log('Original data URL length:', e.target.result.length);
+          resolve(e.target.result);
+        };
+        reader.readAsDataURL(file);
+      });
+      
+      setSelectedImage(imageDataUrl);
+      analyzeImageWithAPI(imageDataUrl);
+      
+    } catch (error) {
+      console.error('Image error:', error);
     }
-  };
+  }
+};
 
   const analyzeImageWithAPI = async (imageDataUrl) => {
     setIsAnalyzing(true);
