@@ -38,15 +38,15 @@ export default function FoliumAI() {
     }
   };
 
-  // Image compression function
-  const compressImage = (file, maxWidth = 800, quality = 0.8) => {
+  // MORE AGGRESSIVE Image compression function
+  const compressImage = (file, maxWidth = 600, quality = 0.6) => {
     return new Promise((resolve) => {
       const canvas = document.createElement('canvas');
       const ctx = canvas.getContext('2d');
       const img = new Image();
       
       img.onload = () => {
-        // Calculate new dimensions
+        // More aggressive size reduction
         const ratio = Math.min(maxWidth / img.width, maxWidth / img.height);
         canvas.width = img.width * ratio;
         canvas.height = img.height * ratio;
@@ -54,8 +54,14 @@ export default function FoliumAI() {
         // Draw and compress
         ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
         
-        // Convert to base64 with compression
-        const compressedDataUrl = canvas.toDataURL('image/jpeg', quality);
+        // Lower quality for smaller file size
+        let compressedDataUrl = canvas.toDataURL('image/jpeg', quality);
+        
+        // If still too large, compress more
+        if (compressedDataUrl.length > 500000) { // 500KB limit
+          compressedDataUrl = canvas.toDataURL('image/jpeg', 0.4);
+        }
+        
         resolve(compressedDataUrl);
       };
       
@@ -105,9 +111,10 @@ export default function FoliumAI() {
       setAnalysis({ message: 'Preparing image...' });
       
       try {
-        // Compress image before processing
-        const compressedImage = await compressImage(file, 800, 0.8);
-        console.log('Compressed image size:', (compressedImage.length / 1024).toFixed(2) + 'KB');
+        // Compress image more aggressively
+        const compressedImage = await compressImage(file, 600, 0.6);
+        const finalSizeKB = (compressedImage.length / 1024);
+        console.log('Compressed image size:', finalSizeKB.toFixed(2) + 'KB');
         
         setSelectedImage(compressedImage);
         await analyzeImageWithAPI(compressedImage);
@@ -124,14 +131,39 @@ export default function FoliumAI() {
     }
   };
 
+  // TEMPORARY: Mock response for testing (uncomment to test without API)
+  const getMockResponse = () => ({
+    result: {
+      is_plant: { binary: true, probability: 0.99 },
+      classification: {
+        suggestions: [{
+          name: "Monstera deliciosa",
+          probability: 0.95,
+          details: {
+            common_names: ["Swiss cheese plant", "Split-leaf philodendron"]
+          }
+        }]
+      },
+      health_assessment: {
+        is_healthy: { binary: true },
+        diseases: { suggestions: [] }
+      }
+    }
+  });
+
   // Enhanced API call with better timeout handling
   const analyzeImageWithAPI = async (imageDataUrl) => {
     setIsAnalyzing(true);
     setAnalysis({ message: 'FoliumAI is analyzing your plant...' });
 
-    // Create abort controller for timeout
+    // UNCOMMENT NEXT 3 LINES TO TEST WITH MOCK DATA:
+    // await new Promise(resolve => setTimeout(resolve, 2000)); // Simulate delay
+    // setAnalysis(processPlantIdResponse(getMockResponse()));
+    // setIsAnalyzing(false); return;
+
+    // Create abort controller for shorter timeout
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 30000); // 30 second timeout
+    const timeoutId = setTimeout(() => controller.abort(), 15000); // Shorter 15-second timeout
 
     try {
       const base64Image = imageDataUrl.split(',')[1];
@@ -165,14 +197,20 @@ export default function FoliumAI() {
       clearTimeout(timeoutId);
       console.error('Error calling identification API:', error);
       
-      let errorMessage = 'Unable to identify plant. Please try again.';
+      let errorMessage = 'Plant identification failed. ';
       
       if (error.name === 'AbortError') {
-        errorMessage = 'Request timed out. Please try with a smaller image or check your internet connection.';
+        errorMessage += 'The request timed out. This usually means the image is too complex or the service is busy.';
+      } else if (error.message.includes('504') || error.message.includes('502')) {
+        errorMessage += 'The plant identification service is temporarily overloaded. Please try again in a moment.';
+      } else if (error.message.includes('429')) {
+        errorMessage += 'Too many requests. Please wait 30 seconds and try again.';
       } else if (error.message.includes('timeout')) {
-        errorMessage = 'The plant identification service is taking too long. Please try again in a moment.';
+        errorMessage += 'The plant identification service is taking too long. Please try again in a moment.';
       } else if (error.message.includes('network') || error.message.includes('fetch')) {
-        errorMessage = 'Network error. Please check your internet connection and try again.';
+        errorMessage += 'Network error. Please check your internet connection and try again.';
+      } else {
+        errorMessage += 'Please try with a different image or check your internet connection.';
       }
       
       setAnalysis({
@@ -395,7 +433,7 @@ export default function FoliumAI() {
                       {analysis?.message || 'FoliumAI is analyzing your plant...'}
                     </p>
                     <p className="text-gray-500 dark:text-gray-400 text-sm mt-2">
-                      This may take up to 30 seconds
+                      This may take up to 15 seconds
                     </p>
                     <div className="mt-4 bg-gray-200 dark:bg-gray-700 rounded-full h-2 max-w-xs mx-auto">
                       <div className="bg-green-600 h-2 rounded-full animate-pulse" style={{width: '60%'}}></div>
